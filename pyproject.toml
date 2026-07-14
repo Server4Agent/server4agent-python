@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "server4agent"
+description = "Python client for the Server4Agent REST API — sync + async, typed, with retries."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["server4agent", "sdk", "agents", "mcp"]
+dynamic = ["version"]
+dependencies = [
+    "httpx>=0.24,<1",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://www.server4agent.com"
+Documentation = "https://www.server4agent.com/docs/sdks"
+Repository = "https://github.com/Server4Agent/server4agent-python"
+
+[tool.hatch.version]
+path = "server4agent/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server4agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
