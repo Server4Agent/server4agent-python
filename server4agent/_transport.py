@@ -112,4 +112,4 @@ def raise_for_status(status: int, body: Any, headers: Mapping[str, str]) -> None
     parsed = body if isinstance(body, dict) else {}
     code = parsed.get("error", "unknown_error")
     message = parsed.get("message") or f"Request failed with status {status}"
-    raise error_from_status(status, code, message, request_id_from(headers))
+    raise error_from_status(status, code, message, request_id_from(headers), parsed)

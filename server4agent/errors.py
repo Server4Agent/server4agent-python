@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 class Server4AgentError(Exception):
@@ -27,7 +27,9 @@ class APIStatusError(Server4AgentError):
 
     Prefer catching a specific subclass (``NotFoundError``, ``RateLimitError``,
     ...). ``code`` is the machine-readable string from the response body and
-    ``request_id`` (when present) is worth quoting to support.
+    ``request_id`` (when present) is worth quoting to support. ``body`` is the
+    whole JSON error response, for the details some errors carry beyond the
+    message (a failed app start's ``log_tail``, a refused write's ``reason``).
     """
 
     def __init__(
@@ -36,12 +38,14 @@ class APIStatusError(Server4AgentError):
         code: str,
         message: str,
         request_id: Optional[str] = None,
+        body: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
         self.request_id = request_id
+        self.body: Dict[str, Any] = body if body is not None else {}
 
     def __repr__(self) -> str:
         return (
@@ -94,10 +98,14 @@ _STATUS_TO_ERROR = {
 
 
 def error_from_status(
-    status: int, code: str, message: str, request_id: Optional[str] = None
+    status: int,
+    code: str,
+    message: str,
+    request_id: Optional[str] = None,
+    body: Optional[Dict[str, Any]] = None,
 ) -> APIStatusError:
     """Map an HTTP status onto the most specific ``APIStatusError`` subclass."""
     cls = _STATUS_TO_ERROR.get(status)
     if cls is None:
         cls = InternalServerError if status >= 500 else APIStatusError
-    return cls(status, code, message, request_id)
+    return cls(status, code, message, request_id, body)
