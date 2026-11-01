@@ -26,9 +26,6 @@ from .._models import (
     ServerKind,
     ServerTier,
     TASK_TERMINAL_STATES,
-    TUNING_TERMINAL_STATES,
-    TuningStart,
-    TuningStatus,
     Webhook,
     _Record,
     bundle_b64,
@@ -36,7 +33,6 @@ from .._models import (
     parse_project,
     parse_server,
     parse_task,
-    parse_tuning_session,
     secret_inputs,
 )
 from .._transport import quote_segment as _seg
@@ -193,11 +189,15 @@ class Project(_Record):
         description: Optional[str] = None,
         visibility: Optional[str] = None,
         access: Optional[str] = None,
+        access_password: Optional[str] = None,
         lifecycle: Optional[str] = None,
         run_plan: Optional[Mapping[str, Any]] = None,
     ) -> "Project":
         """``run_plan`` replaces the stored plan wholesale and is recorded for the
-        next bring-up, not acted on: ``init()`` is how you ask for the rebuild."""
+        next bring-up, not acted on: ``init()`` is how you ask for the rebuild.
+        ``access_password`` sets or changes the password for ``access="password"``;
+        sent alone it changes the password and signs out everyone who used the
+        old one. It is never returned."""
         body = {
             k: v
             for k, v in {
@@ -205,6 +205,7 @@ class Project(_Record):
                 "description": description,
                 "visibility": visibility,
                 "access": access,
+                "access_password": access_password,
                 "lifecycle": lifecycle,
                 "run_plan": dict(run_plan) if run_plan is not None else None,
             }.items()
@@ -366,86 +367,6 @@ class Build(_Record):
         return self
 
 
-class TuningSession(_Record):
-    """A run that fixes an agent from an evaluation platform's report.
-
-    Reading it is what advances it: each ``refresh()`` checks the agent run
-    behind it, and the first one after that run finishes reports the outcome
-    back to the platform. ``wait()`` polls until it is reported or failed.
-    """
-    id: str
-    server_id: str
-    project_id: str
-    #: The agent run doing the fixing (a task on the server). None while building.
-    run_id: Optional[str]
-    #: The bring-up run, when this session built the project from the agent's source.
-    build_run_id: Optional[str]
-    proposal_id: str
-    evaluation_api_base: str
-    #: Name of the secret holding the evaluation API key, never its value.
-    key_secret: str
-    brief_path: Optional[str]
-    brief_revision: Optional[str]
-    status: str
-    change_summary: Optional[str]
-    changed_files: List[str]
-    deployment_url: Optional[str]
-    reported_at: Optional[str]
-    #: Why the last report to the platform failed. The next read retries.
-    report_error: Optional[str]
-    created_at: str
-    updated_at: str
-    #: The agent run behind the session, as of the last ``get()`` or ``refresh()``.
-    run: Optional["Task"]
-
-    def __init__(self, transport: SyncTransport, raw: dict, run: Optional[dict] = None) -> None:
-        self._t = transport
-        self.__dict__.update(parse_tuning_session(raw))
-        self.run = Task(transport, run) if run else None
-
-    def refresh(self) -> "TuningSession":
-        r = self._t.request("GET", f"/tuning/sessions/{_seg(self.id)}")
-        self.__dict__.update(parse_tuning_session(r["session"]))
-        self.run = Task(self._t, r["run"]) if r.get("run") else None
-        return self
-
-    def wait(
-        self,
-        *,
-        poll_interval: float = 2.0,
-        timeout: float = 1800.0,
-        on_poll: Optional[Callable[["TuningSession"], None]] = None,
-    ) -> "TuningSession":
-        """Block until the session is ``reported`` or ``failed``. Raises
-        ``APITimeoutError`` if ``timeout`` elapses first.
-
-        ``on_poll`` is called with ``self`` after each refresh."""
-        deadline = time.monotonic() + timeout
-        while self.status not in TUNING_TERMINAL_STATES:
-            if time.monotonic() >= deadline:
-                raise APITimeoutError(f"Tuning session {self.id} still {self.status!r} after {timeout}s.")
-            time.sleep(poll_interval)
-            self.refresh()
-            if on_poll is not None:
-                on_poll(self)
-        return self
-
-    def report(
-        self,
-        *,
-        change_summary: Optional[str] = None,
-        changed_files: Optional[Sequence[str]] = None,
-        deployment_url: Optional[str] = None,
-        failed: Optional[bool] = None,
-    ) -> "TuningSession":
-        """Send your own account of the fix to the evaluation platform, rather
-        than letting it be read off the run's final message. ``failed=True``
-        closes the run as failed."""
-        r = _report_tuning(self._t, self.id, change_summary, changed_files, deployment_url, failed)
-        self.__dict__.update(parse_tuning_session(r["session"]))
-        return self
-
-
 # =============================================================================
 # Scoped sub-resources — reached via a Server handle (server.tasks, ...).
 # =============================================================================
@@ -466,6 +387,7 @@ class _ScopedProjects:
         description: Optional[str] = None,
         visibility: Optional[str] = None,
         access: Optional[str] = None,
+        access_password: Optional[str] = None,
         lifecycle: Optional[str] = None,
         template: Optional[str] = None,
         source: Optional[Mapping[str, Any]] = None,
@@ -483,6 +405,7 @@ class _ScopedProjects:
                 "description": description,
                 "visibility": visibility,
                 "access": access,
+                "access_password": access_password,
                 "lifecycle": lifecycle,
                 "template": template,
                 "source": dict(source) if source is not None else None,
@@ -660,27 +583,6 @@ def _logs(
         "GET", f"/servers/{_seg(server_id)}/logs", query={"project_id": project_id, "lines": lines}
     )
     return LogsSnapshot.parse(r["logs"]) if r.get("logs") is not None else None
-
-
-def _report_tuning(
-    t: SyncTransport,
-    session_id: str,
-    change_summary: Optional[str],
-    changed_files: Optional[Sequence[str]],
-    deployment_url: Optional[str],
-    failed: Optional[bool],
-) -> dict:
-    body = {
-        k: v
-        for k, v in {
-            "change_summary": change_summary,
-            "changed_files": list(changed_files) if changed_files is not None else None,
-            "deployment_url": deployment_url,
-            "failed": failed,
-        }.items()
-        if v is not None
-    }
-    return t.request("PATCH", f"/tuning/sessions/{_seg(session_id)}", body=body)
 
 
 # =============================================================================
@@ -909,68 +811,6 @@ class SecretsResource:
         return _ScopedSecrets(self._t, f"/projects/{_seg(project_id)}/secrets").set(secrets)
 
 
-class TuningResource:
-    """Tuning runs: fix an agent from an evaluation platform's report, then
-    report back what changed so the platform can score the fixed agent."""
-
-    def __init__(self, transport: SyncTransport) -> None:
-        self._t = transport
-
-    def list(
-        self, *, project_id: Optional[str] = None, status: Optional[TuningStatus] = None
-    ) -> List[TuningSession]:
-        """Newest first."""
-        r = self._t.request("GET", "/tuning/sessions", query={"project_id": project_id, "status": status})
-        return [TuningSession(self._t, s) for s in r["sessions"]]
-
-    def start(
-        self,
-        proposal_id: str,
-        *,
-        project_id: Optional[str] = None,
-        server_id: Optional[str] = None,
-        evaluation_api_base: Optional[str] = None,
-        key_secret: Optional[str] = None,
-    ) -> TuningStart[TuningSession]:
-        """Start fixing the agent behind an improvement proposal.
-
-        Pass ``project_id`` when the agent's code is already a project here, or
-        ``server_id`` to build it into a new project on that server first. The
-        evaluation API key is read from the secret named ``key_secret``
-        (``AGENTX_API_KEY`` unless you name another); a scoped key may not set
-        ``key_secret`` or ``evaluation_api_base``."""
-        body = {
-            k: v
-            for k, v in {
-                "proposal_id": proposal_id,
-                "project_id": project_id,
-                "server_id": server_id,
-                "evaluation_api_base": evaluation_api_base,
-                "key_secret": key_secret,
-            }.items()
-            if v is not None
-        }
-        r = self._t.request("POST", "/tuning/sessions", body=body)
-        return TuningStart.parse(TuningSession(self._t, r["session"]), r)
-
-    def get(self, tuning_session_id: str) -> TuningSession:
-        """Read a session, which also advances it (see ``TuningSession``)."""
-        r = self._t.request("GET", f"/tuning/sessions/{_seg(tuning_session_id)}")
-        return TuningSession(self._t, r["session"], r.get("run"))
-
-    def report(
-        self,
-        tuning_session_id: str,
-        *,
-        change_summary: Optional[str] = None,
-        changed_files: Optional[Sequence[str]] = None,
-        deployment_url: Optional[str] = None,
-        failed: Optional[bool] = None,
-    ) -> TuningSession:
-        r = _report_tuning(self._t, tuning_session_id, change_summary, changed_files, deployment_url, failed)
-        return TuningSession(self._t, r["session"])
-
-
 class KeysResource:
     def __init__(self, transport: SyncTransport) -> None:
         self._t = transport
@@ -1061,7 +901,6 @@ class Server4Agent:
         self.builds = BuildsResource(self._t)
         self.files = FilesResource(self._t)
         self.secrets = SecretsResource(self._t)
-        self.tuning = TuningResource(self._t)
         self.keys = KeysResource(self._t)
         self.webhooks = WebhooksResource(self._t)
 

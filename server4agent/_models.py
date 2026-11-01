@@ -21,9 +21,10 @@ ServerStatus = Literal["running", "sleeping", "building"]
 ServerAction = Literal["start", "stop", "restart"]
 ProjectVisibility = Literal["public", "private"]
 #: Who may open a public project's URL. "team" puts it behind a Server4Agent
-#: sign-in and membership of the owning account; "public" is anyone with the
-#: link, which is the default and how every project behaved before this.
-ProjectAccess = Literal["public", "team"]
+#: sign-in and membership of the owning account; "password" asks for a password
+#: the owner set (``access_password``) and needs no account; "public" is anyone
+#: with the link, which is the default and how every project behaved before this.
+ProjectAccess = Literal["public", "team", "password"]
 ProjectLifecycle = Literal["persistent", "ephemeral"]
 ProjectRuntimeStatus = Literal["unbuilt", "running", "paused"]
 #: Where a project's bring-up has got to, from seeding the workspace to a
@@ -37,15 +38,10 @@ BuildStatus = Literal["queued", "running", "completed"]
 #: ``"live"`` when the project's URL answered within the deploy's wait,
 #: ``"publishing"`` when it is public but had not answered yet.
 DeployStatus = Literal["live", "publishing"]
-#: ``"building"`` while the agent's code is brought up (a run started with
-#: ``server_id``), ``"fixing"`` while the agent works on the brief, then
-#: ``"reported"`` or ``"failed"``.
-TuningStatus = Literal["building", "fixing", "reported", "failed"]
 
 # A task poll stops here: nothing further happens without you (input) or it's over.
 TASK_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "awaiting_input"})
 BUILD_TERMINAL_STATES = frozenset({"completed"})
-TUNING_TERMINAL_STATES = frozenset({"reported", "failed"})
 
 WEBHOOK_EVENTS = (
     "task.created",
@@ -59,8 +55,6 @@ WEBHOOK_EVENTS = (
     "quota.threshold",
     "quota.cap_reached",
     "quota.egress_cap_reached",
-    "tuning.started",
-    "tuning.completed",
 )
 
 
@@ -477,40 +471,6 @@ class ProjectImport(Generic[P]):
         )
 
 
-@dataclass
-class TuningStart(Generic[P]):
-    """What ``tuning.start()`` answered.
-
-    Starting twice for one proposal never starts a second agent: the API hands
-    back the run already under way, with ``started`` False and a ``message``.
-    """
-    session: P
-    #: False when a run already existed for this proposal and ``session`` is it.
-    started: bool
-    message: Optional[str] = None
-    #: False when the brief was issued before the platform finished its
-    #: analysis, so it carries per-case judgements but no summarised diagnosis.
-    analysis_ready: Optional[bool] = None
-    #: Set when the run started but the evaluation platform could not be told.
-    #: The run is unaffected; the next status report retries.
-    warning: Optional[str] = None
-    #: Set when this call built the agent's code into a new project
-    #: (``server_id``): ``projectId``, ``source`` and ``envKeys``.
-    built: Optional[dict] = None
-
-    @staticmethod
-    def parse(session: Any, raw: dict) -> "TuningStart[Any]":
-        return TuningStart(
-            session=session,
-            # The API answers an existing run with a message and a new one without.
-            started="message" not in raw,
-            message=raw.get("message"),
-            analysis_ready=raw.get("analysisReady", raw.get("analysis_ready")),
-            warning=raw.get("warning"),
-            built=raw.get("built"),
-        )
-
-
 # --- request-body helpers ------------------------------------------------------
 
 def secret_inputs(secrets: SecretsArg) -> List[dict]:
@@ -584,8 +544,7 @@ def parse_project(raw: dict) -> Dict[str, Any]:
 
 def parse_task(raw: dict) -> Dict[str, Any]:
     return dict(
-        # A tuning session's run arrives in the run shape, keyed run_id.
-        id=raw["id"] if "id" in raw else raw["run_id"],
+        id=raw["id"],
         server_id=raw.get("serverId", raw.get("server_id")),
         project_id=raw.get("projectId", raw.get("project_id")),
         goal=raw["goal"],
@@ -612,27 +571,4 @@ def parse_build(raw: dict) -> Dict[str, Any]:
         artifacts=raw.get("artifacts", []),
         url=raw.get("url"),
         created_at=raw.get("createdAt", raw.get("created_at")),
-    )
-
-
-def parse_tuning_session(raw: dict) -> Dict[str, Any]:
-    return dict(
-        id=raw["id"],
-        server_id=raw.get("serverId", raw.get("server_id")),
-        project_id=raw.get("projectId", raw.get("project_id")),
-        run_id=raw.get("runId", raw.get("run_id")),
-        build_run_id=raw.get("buildRunId", raw.get("build_run_id")),
-        proposal_id=raw.get("proposalId", raw.get("proposal_id")),
-        evaluation_api_base=raw.get("evaluationApiBase", raw.get("evaluation_api_base")),
-        key_secret=raw.get("keySecretKey", raw.get("key_secret")),
-        brief_path=raw.get("briefPath", raw.get("brief_path")),
-        brief_revision=raw.get("briefRevision", raw.get("brief_revision")),
-        status=raw["status"],
-        change_summary=raw.get("changeSummary", raw.get("change_summary")),
-        changed_files=raw.get("changedFiles", raw.get("changed_files")) or [],
-        deployment_url=raw.get("deploymentUrl", raw.get("deployment_url")),
-        reported_at=raw.get("reportedAt", raw.get("reported_at")),
-        report_error=raw.get("reportError", raw.get("report_error")),
-        created_at=raw.get("createdAt", raw.get("created_at")),
-        updated_at=raw.get("updatedAt", raw.get("updated_at")),
     )

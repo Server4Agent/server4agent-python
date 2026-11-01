@@ -4,7 +4,6 @@ from ._async.client import (
     AsyncProject,
     AsyncServer,
     AsyncTask,
-    AsyncTuningSession,
 )
 from ._models import (
     AccountUsage,
@@ -29,12 +28,10 @@ from ._models import (
     ProjectVisibility,
     Secret,
     SecretInput,
-    TuningStart,
-    TuningStatus,
     WEBHOOK_EVENTS,
     Webhook,
 )
-from ._sync.client import Build, Project, Server, Server4Agent, Task, TuningSession
+from ._sync.client import Build, Project, Server, Server4Agent, Task
 from ._version import __version__
 from .errors import (
     APIConnectionError,
@@ -61,13 +58,11 @@ __all__ = [
     "Project",
     "Task",
     "Build",
-    "TuningSession",
     # async handles
     "AsyncServer",
     "AsyncProject",
     "AsyncTask",
     "AsyncBuild",
-    "AsyncTuningSession",
     # data types
     "ApiKey",
     "CreatedApiKey",
@@ -78,7 +73,6 @@ __all__ = [
     "AppStart",
     "Me",
     "AccountUsage",
-    "TuningStart",
     "ExecResult",
     "BuildStep",
     "ProjectTemplate",
@@ -93,7 +87,6 @@ __all__ = [
     "ProjectVisibility",
     "ProjectAccess",
     "ProjectInitPhase",
-    "TuningStatus",
     "WEBHOOK_EVENTS",
     # errors
     "Server4AgentError",

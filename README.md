@@ -73,6 +73,8 @@ server.refresh()                    # re-fetch in place
 
 project = client.projects.get("prj_xyz")
 project.update(visibility="public")
+# Ask visitors for a password before the URL opens. No account needed to get in.
+project.update(access="password", access_password="a long shared passphrase")
 ```
 
 Binary files (e.g. a generated `.xlsx`) round-trip through `write`/`read_binary`
@@ -201,18 +203,6 @@ if me.usage.blocked:
     print("new tasks are refused:", me.usage.reason)
 ```
 
-## Tuning runs
-
-A tuning run fixes an agent from an evaluation platform's report, then reports
-back what changed. Reading a session is what advances it, so `wait()` polls it
-to `reported` or `failed`:
-
-```python
-start = client.tuning.start("prop_123", project_id=project.id)
-session = start.session.wait(on_poll=lambda s: print(s.status))
-print(session.change_summary, session.changed_files)
-```
-
 ## Errors
 
 Every failure is a subclass of `Server4AgentError`, so you can catch broadly or
@@ -270,7 +260,7 @@ Runnable scripts in [`examples/`](examples/):
 ## API surface
 
 `servers`, `projects`, `templates`, `tasks`, `builds`, `files`, `secrets`,
-`tuning`, `keys`, `webhooks`, and `client.me()`. Every REST operation has a
+`keys`, `webhooks`, and `client.me()`. Every REST operation has a
 method on both clients; see the
 [REST API docs](https://www.server4agent.com/docs/api) for the endpoints each
 one wraps.

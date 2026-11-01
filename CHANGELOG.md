@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.0
+
+Tuning runs are removed. The API no longer has the `/tuning/sessions`
+endpoints, so neither client calls them. This is a breaking change.
+
+- `client.tuning` is gone from both clients, with `list()`, `start()`, `get()`
+  and `report()`, and so are the `TuningSession` and `AsyncTuningSession`
+  handles and the `TuningStart` and `TuningStatus` types.
+- `WEBHOOK_EVENTS` no longer lists `tuning.started` or `tuning.completed`, and
+  `webhooks.create()` with either is refused as an unknown event. Nothing
+  sends them any more. A webhook created before they were retired may still
+  have them stored; `webhooks.list()` leaves them off its `events`.
+
+## 0.8.0
+
+Projects can put their URL behind a password.
+
+- `ProjectAccess` gains `"password"`: a visitor to the project's URL is asked
+  for a password the owner set, and gets in without any account. A project
+  read from the API can now report it, so code that branches on `access`
+  should handle the new value.
+- `projects.create()` and `project.update()` (sync and async, and the flat
+  `client.projects.update(project_id, ...)`) take `access_password`. It is
+  required when switching to `access="password"` unless a password is already
+  set, and refused with any other access. Sent on its own to a password
+  project, it changes the password and signs out everyone who used the old
+  one. Switching to another access discards it. It is at least 4 characters
+  (a 4 digit code works), stored encrypted, and never returned by the API.
+
 ## 0.7.0
 
 The client now covers every operation in the REST API. Everything below is

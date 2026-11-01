@@ -24,7 +24,6 @@ from server4agent import (
     Server,
     Server4Agent,
     Server4AgentError,
-    TuningStart,
     WEBHOOK_EVENTS,
 )
 from server4agent._sync.client import (
@@ -804,97 +803,6 @@ def test_me(api):
     assert me.authenticated_key == {"id": "key_1", "label": "ci"}
 
 
-# --- tuning -------------------------------------------------------------------
-
-def _tuning_raw(**over):
-    base = {
-        "id": "tun_1", "serverId": "srv_1", "projectId": "prj_1", "runId": "tsk_5",
-        "buildRunId": None, "proposalId": "prop_1",
-        "evaluationApiBase": "https://api.evals.example", "keySecretKey": "EVAL_API_KEY",
-        "briefPath": ".tuning/brief.md", "briefRevision": "r1", "status": "fixing",
-        "changeSummary": None, "changedFiles": [], "deploymentUrl": None,
-        "reportedAt": None, "reportError": None,
-        "createdAt": "2026-10-11T00:00:00Z", "updatedAt": "2026-10-11T00:00:00Z",
-    }
-    base.update(over)
-    return base
-
-
-def test_tuning_list_with_filters(api):
-    c = api.client(_routes({("GET", "/tuning/sessions"): (200, {"sessions": [_tuning_raw()]})}))
-    sessions = api.call(c.tuning.list(project_id="prj_1", status="fixing"))
-    assert api.last["query"] == {"project_id": "prj_1", "status": "fixing"}
-    s = sessions[0]
-    assert (s.id, s.server_id, s.project_id, s.run_id, s.proposal_id) == ("tun_1", "srv_1", "prj_1", "tsk_5", "prop_1")
-    assert (s.key_secret, s.evaluation_api_base, s.status) == ("EVAL_API_KEY", "https://api.evals.example", "fixing")
-    assert s.run is None
-
-    api.call(c.tuning.list())
-    assert api.last["query"] == {}
-
-
-def test_tuning_start_new_and_already_running(api):
-    responses = iter([
-        (201, {"session": _tuning_raw(), "analysisReady": False, "warning": "platform not told"}),
-        (200, {"session": _tuning_raw(), "message": "A tuning run already exists for this proposal."}),
-    ])
-
-    def handler(req):
-        status, body = next(responses)
-        return httpx.Response(status, json=body)
-
-    c = api.client(handler)
-    first = api.call(c.tuning.start("prop_1", project_id="prj_1", key_secret="EVAL_API_KEY"))
-    assert api.last["method"] == "POST" and api.last["path"] == "/tuning/sessions"
-    assert api.last["body"] == {"proposal_id": "prop_1", "project_id": "prj_1", "key_secret": "EVAL_API_KEY"}
-    assert isinstance(first, TuningStart)
-    assert first.started is True and first.analysis_ready is False and first.warning == "platform not told"
-    assert first.session.id == "tun_1"
-
-    again = api.call(c.tuning.start("prop_1", server_id="srv_1"))
-    assert api.last["body"] == {"proposal_id": "prop_1", "server_id": "srv_1"}
-    assert again.started is False and again.message.startswith("A tuning run already exists")
-
-
-def test_tuning_get_carries_the_run_and_wait_polls_to_reported(api):
-    run = {  # the run arrives in the run shape, keyed run_id
-        "run_id": "tsk_5", "server_id": "srv_1", "project_id": "prj_1", "goal": "Fix the agent",
-        "message_type": "system", "status": "running", "created_at": "t", "log": "reading brief",
-        "result": None, "question": None, "change": None, "usage": None,
-    }
-    states = iter(["fixing", "reported"])
-
-    def handler(req):
-        return httpx.Response(200, json={"session": _tuning_raw(status=next(states)), "run": run})
-
-    c = api.client(handler)
-    s = api.call(c.tuning.get(HOSTILE))
-    assert api.last["path"] == f"/tuning/sessions/{HOSTILE_SEG}"
-    assert s.status == "fixing"
-    assert (s.run.id, s.run.server_id, s.run.project_id, s.run.log) == ("tsk_5", "srv_1", "prj_1", "reading brief")
-
-    polled = []
-    done = api.call(s.wait(poll_interval=0, on_poll=lambda x: polled.append(x.status)))
-    assert done.status == "reported" and polled == ["reported"]
-
-
-def test_tuning_report(api):
-    reported = _tuning_raw(status="reported", changeSummary="Grounded answers in the docs", changedFiles=["agent.py"])
-    c = api.client(_routes({
-        ("PATCH", f"/tuning/sessions/{HOSTILE_SEG}"): (200, {"session": reported}),
-        ("GET", "/tuning/sessions"): (200, {"sessions": [_tuning_raw(id=HOSTILE)]}),
-    }))
-    s = api.call(c.tuning.report(HOSTILE, change_summary="Grounded answers in the docs", changed_files=("agent.py",)))
-    assert api.last["method"] == "PATCH"
-    assert api.last["body"] == {"change_summary": "Grounded answers in the docs", "changed_files": ["agent.py"]}
-    assert s.status == "reported" and s.changed_files == ["agent.py"]
-
-    handle = api.call(c.tuning.list())[0]
-    api.call(handle.report(failed=True))
-    assert api.last["body"] == {"failed": True}
-    assert handle.status == "reported"
-
-
 # --- drift fixed in existing methods ------------------------------------------
 
 def test_deployments_parse_with_project_id(api):
@@ -947,7 +855,8 @@ def test_webhooks_create_without_events_omits_them(api):
     })}))
     api.call(c.webhooks.create("https://hooks.northstar.example/s4a"))
     assert api.last["body"] == {"url": "https://hooks.northstar.example/s4a"}
-    assert "tuning.completed" in WEBHOOK_EVENTS and "quota.egress_cap_reached" in WEBHOOK_EVENTS
+    assert "quota.egress_cap_reached" in WEBHOOK_EVENTS
+    assert "tuning.started" not in WEBHOOK_EVENTS and "tuning.completed" not in WEBHOOK_EVENTS
 
 
 def test_exec_in_a_project_folder(api):
@@ -1026,6 +935,22 @@ def test_project_update_run_plan_and_refresh_keeps_init_run_id(api):
     assert api.last["method"] == "PATCH" and api.last["body"] == {"run_plan": plan}
     assert project.run_plan == plan
     assert project.init_run_id == "tsk_3"  # only the create response carries it
+
+
+def test_project_access_password_goes_out_as_access_password(api):
+    c = api.client(_routes({
+        ("POST", "/servers/srv_1/projects"): (201, _project_raw(access="password")),
+        ("PATCH", "/projects/prj_1"): (200, _project_raw(access="password")),
+    }))
+    project = api.call(c.projects.create(
+        "srv_1", name="web", access="password", access_password="correct horse battery",
+    ))
+    assert api.last["body"] == {
+        "name": "web", "access": "password", "access_password": "correct horse battery",
+    }
+    assert project.access == "password"
+    api.call(project.update(access_password="a new passphrase"))
+    assert api.last["method"] == "PATCH" and api.last["body"] == {"access_password": "a new passphrase"}
 
 
 def test_template_source_kind_and_failed_build_steps(api):

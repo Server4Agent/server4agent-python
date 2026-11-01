@@ -27,9 +27,6 @@ from .._models import (
     ServerKind,
     ServerTier,
     TASK_TERMINAL_STATES,
-    TUNING_TERMINAL_STATES,
-    TuningStart,
-    TuningStatus,
     Webhook,
     _Record,
     bundle_b64,
@@ -37,7 +34,6 @@ from .._models import (
     parse_project,
     parse_server,
     parse_task,
-    parse_tuning_session,
     secret_inputs,
 )
 from .._transport import quote_segment as _seg
@@ -174,6 +170,7 @@ class AsyncProject(_Record):
         description: Optional[str] = None,
         visibility: Optional[str] = None,
         access: Optional[str] = None,
+        access_password: Optional[str] = None,
         lifecycle: Optional[str] = None,
         run_plan: Optional[Mapping[str, Any]] = None,
     ) -> "AsyncProject":
@@ -184,6 +181,7 @@ class AsyncProject(_Record):
                 "description": description,
                 "visibility": visibility,
                 "access": access,
+                "access_password": access_password,
                 "lifecycle": lifecycle,
                 "run_plan": dict(run_plan) if run_plan is not None else None,
             }.items()
@@ -315,74 +313,6 @@ class AsyncBuild(_Record):
         return self
 
 
-class AsyncTuningSession(_Record):
-    """A tuning run. Reading it advances it; ``wait()`` polls until it is
-    ``reported`` or ``failed``."""
-    id: str
-    server_id: str
-    project_id: str
-    run_id: Optional[str]
-    build_run_id: Optional[str]
-    proposal_id: str
-    evaluation_api_base: str
-    key_secret: str
-    brief_path: Optional[str]
-    brief_revision: Optional[str]
-    status: str
-    change_summary: Optional[str]
-    changed_files: List[str]
-    deployment_url: Optional[str]
-    reported_at: Optional[str]
-    report_error: Optional[str]
-    created_at: str
-    updated_at: str
-    run: Optional["AsyncTask"]
-
-    def __init__(self, transport: AsyncTransport, raw: dict, run: Optional[dict] = None) -> None:
-        self._t = transport
-        self.__dict__.update(parse_tuning_session(raw))
-        self.run = AsyncTask(transport, run) if run else None
-
-    async def refresh(self) -> "AsyncTuningSession":
-        r = await self._t.request("GET", f"/tuning/sessions/{_seg(self.id)}")
-        self.__dict__.update(parse_tuning_session(r["session"]))
-        self.run = AsyncTask(self._t, r["run"]) if r.get("run") else None
-        return self
-
-    async def wait(
-        self,
-        *,
-        poll_interval: float = 2.0,
-        timeout: float = 1800.0,
-        on_poll: Optional[Callable[["AsyncTuningSession"], Union[None, Awaitable[None]]]] = None,
-    ) -> "AsyncTuningSession":
-        """Await until the session is reported or failed. ``on_poll`` (sync or
-        async) is called with ``self`` after each refresh."""
-        deadline = time.monotonic() + timeout
-        while self.status not in TUNING_TERMINAL_STATES:
-            if time.monotonic() >= deadline:
-                raise APITimeoutError(f"Tuning session {self.id} still {self.status!r} after {timeout}s.")
-            await asyncio.sleep(poll_interval)
-            await self.refresh()
-            if on_poll is not None:
-                res = on_poll(self)
-                if res is not None:
-                    await res
-        return self
-
-    async def report(
-        self,
-        *,
-        change_summary: Optional[str] = None,
-        changed_files: Optional[Sequence[str]] = None,
-        deployment_url: Optional[str] = None,
-        failed: Optional[bool] = None,
-    ) -> "AsyncTuningSession":
-        r = await _report_tuning(self._t, self.id, change_summary, changed_files, deployment_url, failed)
-        self.__dict__.update(parse_tuning_session(r["session"]))
-        return self
-
-
 # =============================================================================
 # Scoped sub-resources
 # =============================================================================
@@ -403,6 +333,7 @@ class _ScopedProjects:
         description: Optional[str] = None,
         visibility: Optional[str] = None,
         access: Optional[str] = None,
+        access_password: Optional[str] = None,
         lifecycle: Optional[str] = None,
         template: Optional[str] = None,
         source: Optional[Mapping[str, Any]] = None,
@@ -416,6 +347,7 @@ class _ScopedProjects:
                 "description": description,
                 "visibility": visibility,
                 "access": access,
+                "access_password": access_password,
                 "lifecycle": lifecycle,
                 "template": template,
                 "source": dict(source) if source is not None else None,
@@ -580,27 +512,6 @@ async def _logs(
         "GET", f"/servers/{_seg(server_id)}/logs", query={"project_id": project_id, "lines": lines}
     )
     return LogsSnapshot.parse(r["logs"]) if r.get("logs") is not None else None
-
-
-async def _report_tuning(
-    t: AsyncTransport,
-    session_id: str,
-    change_summary: Optional[str],
-    changed_files: Optional[Sequence[str]],
-    deployment_url: Optional[str],
-    failed: Optional[bool],
-) -> dict:
-    body = {
-        k: v
-        for k, v in {
-            "change_summary": change_summary,
-            "changed_files": list(changed_files) if changed_files is not None else None,
-            "deployment_url": deployment_url,
-            "failed": failed,
-        }.items()
-        if v is not None
-    }
-    return await t.request("PATCH", f"/tuning/sessions/{_seg(session_id)}", body=body)
 
 
 # =============================================================================
@@ -822,58 +733,6 @@ class SecretsResource:
         return await _ScopedSecrets(self._t, f"/projects/{_seg(project_id)}/secrets").set(secrets)
 
 
-class TuningResource:
-    def __init__(self, transport: AsyncTransport) -> None:
-        self._t = transport
-
-    async def list(
-        self, *, project_id: Optional[str] = None, status: Optional[TuningStatus] = None
-    ) -> List[AsyncTuningSession]:
-        r = await self._t.request("GET", "/tuning/sessions", query={"project_id": project_id, "status": status})
-        return [AsyncTuningSession(self._t, s) for s in r["sessions"]]
-
-    async def start(
-        self,
-        proposal_id: str,
-        *,
-        project_id: Optional[str] = None,
-        server_id: Optional[str] = None,
-        evaluation_api_base: Optional[str] = None,
-        key_secret: Optional[str] = None,
-    ) -> TuningStart[AsyncTuningSession]:
-        body = {
-            k: v
-            for k, v in {
-                "proposal_id": proposal_id,
-                "project_id": project_id,
-                "server_id": server_id,
-                "evaluation_api_base": evaluation_api_base,
-                "key_secret": key_secret,
-            }.items()
-            if v is not None
-        }
-        r = await self._t.request("POST", "/tuning/sessions", body=body)
-        return TuningStart.parse(AsyncTuningSession(self._t, r["session"]), r)
-
-    async def get(self, tuning_session_id: str) -> AsyncTuningSession:
-        r = await self._t.request("GET", f"/tuning/sessions/{_seg(tuning_session_id)}")
-        return AsyncTuningSession(self._t, r["session"], r.get("run"))
-
-    async def report(
-        self,
-        tuning_session_id: str,
-        *,
-        change_summary: Optional[str] = None,
-        changed_files: Optional[Sequence[str]] = None,
-        deployment_url: Optional[str] = None,
-        failed: Optional[bool] = None,
-    ) -> AsyncTuningSession:
-        r = await _report_tuning(
-            self._t, tuning_session_id, change_summary, changed_files, deployment_url, failed
-        )
-        return AsyncTuningSession(self._t, r["session"])
-
-
 class KeysResource:
     def __init__(self, transport: AsyncTransport) -> None:
         self._t = transport
@@ -961,7 +820,6 @@ class AsyncServer4Agent:
         self.builds = BuildsResource(self._t)
         self.files = FilesResource(self._t)
         self.secrets = SecretsResource(self._t)
-        self.tuning = TuningResource(self._t)
         self.keys = KeysResource(self._t)
         self.webhooks = WebhooksResource(self._t)
 
