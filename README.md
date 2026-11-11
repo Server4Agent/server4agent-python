@@ -1,9 +1,9 @@
 # server4agent
 
-Python client for the [Server4Agent](https://www.server4agent.com) REST API —
+Python client for the [Server4Agent](https://www.server4agent.com) REST API:
 sync **and** async, fully typed, with automatic retries.
 
-This SDK is for the code *around* your agent — your backend, a script, a
+This SDK is for the code *around* your agent: your backend, a script, a
 notebook, a webhook receiver. If your agent itself does tool-calling, point it
 at the [MCP server](https://www.server4agent.com/docs/mcp) directly; it doesn't
 need this package.
@@ -62,7 +62,7 @@ asyncio.run(main())
 
 ## Handles
 
-`create()` and `get()` return rich handles — data records you can also act on:
+`create()` and `get()` return rich handles, data records you can also act on:
 
 ```python
 server = client.servers.get("srv_abc")
@@ -234,7 +234,7 @@ Server4Agent(timeout=30.0, max_retries=4)
 import os
 from server4agent import verify_webhook_signature
 
-# request.data must be the raw body — parse it as JSON only after verifying.
+# request.data must be the raw body. Parse it as JSON only after verifying.
 ok = verify_webhook_signature(
     secret=os.environ["SERVER4AGENT_WEBHOOK_SECRET"],
     body=request.data.decode("utf-8"),
@@ -243,6 +243,11 @@ ok = verify_webhook_signature(
 if not ok:
     return "invalid signature", 401
 ```
+
+A delivery that times out or gets a 408, 425, 429 or 5xx is sent again, up to
+four attempts in all, so the same event can arrive twice. Every payload has an
+`id` (also in the `Server4Agent-Event-Id` header) that stays the same across
+attempts: skip an `id` you have already handled.
 
 ## Examples
 

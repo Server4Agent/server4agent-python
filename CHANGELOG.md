@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0
+
+- `WEBHOOK_EVENTS` adds `build.failed`, which the API now sends when a build's
+  run fails or is cancelled. The payload carries `build_id`, `server_id`,
+  `project_id`, `task_id` and a `reason` of `failed`, `cancelled` or `no_run`.
+- Webhook deliveries are now retried when the receiver times out or answers
+  408, 425, 429 or 5xx, so a receiver can see the same event more than once.
+  Every payload has an `id` (also sent as the `Server4Agent-Event-Id` header)
+  that stays the same across retries: use it to skip an event already handled.
+  The README shows how.
+
 ## 0.9.0
 
 Tuning runs are removed. The API no longer has the `/tuning/sessions`

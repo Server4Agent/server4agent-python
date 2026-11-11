@@ -47,6 +47,7 @@ WEBHOOK_EVENTS = (
     "task.created",
     "task.completed",
     "task.failed",
+    "build.failed",
     "deployment.live",
     "deployment.removed",
     "server.created",
